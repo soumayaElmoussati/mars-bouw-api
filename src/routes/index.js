@@ -8,7 +8,6 @@ router.post('/auth/login',    auth.login)
 router.get ('/auth/me',       authMiddleware, auth.me)
 router.post('/auth/logout',   authMiddleware, auth.logout)
 
-// All below require auth
 router.use(authMiddleware)
 
 // Dashboard
@@ -36,7 +35,7 @@ router.delete('/projects/:id/tasks/:taskId',       pr.deleteTask)
 router.post  ('/projects/:id/problems',            pr.addProblem)
 router.put   ('/projects/:id/problems/:problemId', pr.updateProblem)
 
-// Planning ← NOUVEAU
+// Planning
 const pl = require('../controllers/planningController')
 router.get   ('/planning',     pl.getAll)
 router.post  ('/planning',     pl.create)
@@ -80,17 +79,33 @@ router.put   ('/tasks/:id',        ta.update)
 router.patch ('/tasks/:id/status', ta.setStatus)
 router.delete('/tasks/:id',        ta.remove)
 
-// Stock
+// Stock + Suppliers
 const st = require('../controllers/stockController')
 router.get   ('/stock/items',              st.getItems)
 router.post  ('/stock/items',              st.createItem)
 router.put   ('/stock/items/:id',          st.updateItem)
+router.delete('/stock/items/:id',          st.deleteItem)
 router.patch ('/stock/items/:id/quantity', st.updateQuantity)
 router.get   ('/stock/orders',             st.getOrders)
 router.post  ('/stock/orders',             st.createOrder)
 router.patch ('/stock/orders/:id/receive', st.receiveOrder)
 router.get   ('/stock/suppliers',          st.getSuppliers)
 router.post  ('/stock/suppliers',          st.createSupplier)
+router.put   ('/stock/suppliers/:id',      st.updateSupplier)
+router.delete('/stock/suppliers/:id',      st.deleteSupplier)
+
+// Subcontractors + Orders + Payments
+const sub = require('../controllers/subcontractorsController')
+router.get   ('/subcontractors',                     sub.getAll)
+router.get   ('/subcontractors/:id',                 sub.getById)
+router.post  ('/subcontractors',                     sub.create)
+router.put   ('/subcontractors/:id',                 sub.update)
+router.delete('/subcontractors/:id',                 sub.remove)
+router.get   ('/subcontractors/orders/all',          sub.getOrders)
+router.post  ('/subcontractors/orders',              sub.createOrder)
+router.put   ('/subcontractors/orders/:id',          sub.updateOrder)
+router.delete('/subcontractors/orders/:id',          sub.deleteOrder)
+router.post  ('/subcontractors/orders/:id/payments', sub.addPayment)
 
 // CRM
 const crm = require('../controllers/crmController')
@@ -103,7 +118,7 @@ router.get   ('/crm/contacts',     crm.getContacts)
 router.post  ('/crm/contacts',     crm.createContact)
 router.delete('/crm/contacts/:id', crm.deleteContact)
 
-// Werkbon ← NOUVEAU
+// Werkbon
 const wb = require('../controllers/werkbonController')
 router.get   ('/werkbon',          wb.getAll)
 router.get   ('/werkbon/:id',      wb.getById)
@@ -112,7 +127,7 @@ router.put   ('/werkbon/:id',      wb.update)
 router.delete('/werkbon/:id',      wb.remove)
 router.post  ('/werkbon/:id/sign', wb.sign)
 
-// Checklist ← NOUVEAU
+// Checklist
 const ck = require('../controllers/checklistController')
 router.get   ('/checklist',                           ck.getAll)
 router.post  ('/checklist',                           ck.create)
