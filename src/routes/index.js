@@ -94,7 +94,7 @@ router.post  ('/stock/suppliers',          st.createSupplier)
 router.put   ('/stock/suppliers/:id',      st.updateSupplier)
 router.delete('/stock/suppliers/:id',      st.deleteSupplier)
 
-// Subcontractors + Orders + Payments
+
 const sub = require('../controllers/subcontractorsController')
 router.get   ('/subcontractors',                     sub.getAll)
 router.get   ('/subcontractors/:id',                 sub.getById)
