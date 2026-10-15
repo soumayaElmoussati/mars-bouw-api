@@ -260,23 +260,69 @@ exports.deleteUitgave = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
-// ── FINANCE STATS ─────────────────────────────────────────────────────────────
+// Replace the exports.getStats function in your financeController.js with this:
+
 exports.getStats = async (req, res, next) => {
   try {
-    const [revenue, expenses, open] = await Promise.all([
+    const [revenue, expenses, openInv, monthly, topCl] = await Promise.all([
       query(`SELECT COALESCE(SUM(fl.qty*fl.unit_price*(1+fl.btw/100)),0) AS total
              FROM factuur_lines fl JOIN facturen f ON fl.factuur_id=f.id`),
+
       query(`SELECT COALESCE(SUM(amount),0) AS total FROM uitgaven WHERE status='betaald'`),
-      query(`SELECT COUNT(*) AS count, COALESCE(SUM(fl.qty*fl.unit_price*(1+fl.btw/100)),0) AS total
+
+      query(`SELECT COUNT(*) AS count,
+               COALESCE(SUM(fl.qty*fl.unit_price*(1+fl.btw/100)),0) AS total
              FROM facturen f JOIN factuur_lines fl ON f.id=fl.factuur_id
              WHERE f.status != 'betaald'`),
+
+      // Monthly revenue + expenses
+      query(`
+        SELECT
+          TO_CHAR(months.m, 'YYYY-MM') AS month,
+          COALESCE(rev.revenue,  0) AS revenue,
+          COALESCE(exp.expenses, 0) AS expenses
+        FROM generate_series(
+          DATE_TRUNC('year', NOW()),
+          DATE_TRUNC('year', NOW()) + INTERVAL '11 months',
+          INTERVAL '1 month'
+        ) AS months(m)
+        LEFT JOIN (
+          SELECT DATE_TRUNC('month', f.date) AS m,
+                 SUM(fl.qty * fl.unit_price * (1 + fl.btw/100)) AS revenue
+          FROM facturen f JOIN factuur_lines fl ON f.id = fl.factuur_id
+          GROUP BY 1
+        ) rev ON rev.m = months.m
+        LEFT JOIN (
+          SELECT DATE_TRUNC('month', date) AS m, SUM(amount) AS expenses
+          FROM uitgaven WHERE status='betaald'
+          GROUP BY 1
+        ) exp ON exp.m = months.m
+        ORDER BY months.m
+      `),
+
+      // Top clients by revenue
+      query(`
+        SELECT f.client_name,
+               COALESCE(SUM(fl.qty * fl.unit_price * (1 + fl.btw/100)), 0) AS revenue,
+               COUNT(DISTINCT f.id) AS invoices
+        FROM facturen f JOIN factuur_lines fl ON f.id = fl.factuur_id
+        GROUP BY f.client_name
+        ORDER BY revenue DESC
+        LIMIT 5
+      `),
     ])
+
+    const totalRevenue  = +revenue.rows[0].total
+    const totalExpenses = +expenses.rows[0].total
+
     res.json({
-      totalRevenue:     +revenue.rows[0].total,
-      totalExpenses:    +expenses.rows[0].total,
-      result:           +revenue.rows[0].total - +expenses.rows[0].total,
-      openInvoices:     +open.rows[0].count,
-      openInvoiceTotal: +open.rows[0].total,
+      totalRevenue,
+      totalExpenses,
+      result:           totalRevenue - totalExpenses,
+      openInvoices:     +openInv.rows[0].count,
+      openInvoiceTotal: +openInv.rows[0].total,
+      monthlyRevenue:   monthly.rows,
+      topClients:       topCl.rows,
     })
   } catch (err) { next(err) }
 }

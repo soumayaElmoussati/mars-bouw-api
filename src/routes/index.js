@@ -94,7 +94,7 @@ router.post  ('/stock/suppliers',          st.createSupplier)
 router.put   ('/stock/suppliers/:id',      st.updateSupplier)
 router.delete('/stock/suppliers/:id',      st.deleteSupplier)
 
-
+// Subcontractors
 const sub = require('../controllers/subcontractorsController')
 router.get   ('/subcontractors',                     sub.getAll)
 router.get   ('/subcontractors/:id',                 sub.getById)
@@ -117,6 +117,13 @@ router.delete('/crm/notes/:id',    crm.deleteNote)
 router.get   ('/crm/contacts',     crm.getContacts)
 router.post  ('/crm/contacts',     crm.createContact)
 router.delete('/crm/contacts/:id', crm.deleteContact)
+
+// Photos
+const ph = require('../controllers/photosController')
+router.get   ('/photos',     ph.getAll)
+router.post  ('/photos',     ph.create)
+router.put   ('/photos/:id', ph.update)
+router.delete('/photos/:id', ph.remove)
 
 // Werkbon
 const wb = require('../controllers/werkbonController')
