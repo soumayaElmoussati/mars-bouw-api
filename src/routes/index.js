@@ -3,6 +3,7 @@ const { authMiddleware } = require('../middleware/auth')
 
 // Auth (no middleware on login)
 const auth = require('../controllers/authController')
+router.post('/register', auth.register)
 router.post('/auth/login',  auth.login)
 router.get ('/auth/me',     authMiddleware, auth.me)
 router.post('/auth/logout', authMiddleware, auth.logout)

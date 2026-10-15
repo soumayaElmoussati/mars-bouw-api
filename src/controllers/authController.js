@@ -49,3 +49,54 @@ exports.me = async (req, res, next) => {
 exports.logout = (req, res) => {
   res.json({ message: 'Logged out' })
 }
+
+exports.register = async (req, res, next) => {
+  try {
+    let { name, email, password, role, avatar } = req.body
+
+    // --- Validation ---
+    if (!name || !email || !password)
+      return res.status(400).json({ error: 'Name, email and password are required' })
+
+    name  = name.trim()
+    email = email.toLowerCase().trim()
+
+    if (name.length < 2)
+      return res.status(400).json({ error: 'Name must be at least 2 characters' })
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email))
+      return res.status(400).json({ error: 'Invalid email format' })
+
+    if (password.length < 8)
+      return res.status(400).json({ error: 'Password must be at least 8 characters' })
+
+    // Rôle : par défaut 'user'. On n'autorise 'admin'/'manager'
+    // que si l'appelant est déjà admin (à adapter selon ta logique).
+    const allowedRoles = ['admin', 'manager', 'user']
+    role = role || 'user'
+    if (!allowedRoles.includes(role))
+      return res.status(400).json({ error: 'Invalid role' })
+
+    // --- Vérifier si l'email existe déjà ---
+    const existing = await query('SELECT id FROM users WHERE email = $1', [email])
+    if (existing.rows[0])
+      return res.status(409).json({ error: 'Email already in use' })
+
+    // --- Hash du mot de passe ---
+    const hashed = await bcrypt.hash(password, 12)
+
+    // --- Insertion ---
+    const { rows } = await query(
+      `INSERT INTO users (name, email, password, role, avatar)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, email, role, avatar, active, created_at`,
+      [name, email, hashed, role, avatar || null]
+    )
+
+    const user = rows[0]
+    const token = signToken(user)
+
+    res.status(201).json({ token, user })
+  } catch (err) { next(err) }
+}
