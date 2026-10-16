@@ -1,11 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// PDF GENERATION — html-pdf-lite
-// ───────────────────────────────────────────────────────────────────────────
-// Solution serverless-friendly : aucune dépendance Chromium, aucun binaire
-// système, aucune bibliothèque NSS à extraire. Fonctionne sur Vercel, AWS
-// Lambda, Netlify Functions et en local sans configuration.
-// ═══════════════════════════════════════════════════════════════════════════
-
 const { query } = require('../db/pool')
 const fs   = require('fs')
 const path = require('path')
@@ -272,16 +264,39 @@ function buildHTML(data) {
 </html>`
 }
 
-// ── PDF via html-pdf-lite (serverless + local, no Chromium) ────────────────
+// ── PDF via Chromium (Vercel compatible) ───────────────────────────────────
 async function htmlToPDF(html) {
-  // html-pdf-lite est un module CommonJS → require() direct fonctionne
-  const { renderPdfFromHtml } = require('html-pdf-lite')
+  // On Vercel: use @sparticuz/chromium + puppeteer-core
+  // Locally: use puppeteer directly
+  let browser
+  try {
+    // Try Vercel/Lambda approach first
+    const chromium = require('@sparticuz/chromium')
+    const puppeteer = require('puppeteer-core')
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    })
+  } catch {
+    // Fallback to local puppeteer
+    const puppeteer = require('puppeteer')
+    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  }
 
-  return await renderPdfFromHtml(html, {
-    format: 'A4',
-    printBackground: true,
-    margin: { top: 0, right: 0, bottom: 0, left: 0 },
-  })
+  try {
+    const page = await browser.newPage()
+    await page.setContent(html, { waitUntil: 'networkidle0' })
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: 0, right: 0, bottom: 0, left: 0 },
+    })
+    return pdf
+  } finally {
+    await browser.close()
+  }
 }
 
 // ── OFFERTE endpoint ───────────────────────────────────────────────────────
