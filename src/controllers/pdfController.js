@@ -264,26 +264,18 @@ function buildHTML(data) {
 </html>`
 }
 
+
 // ── PDF via Chromium (Vercel compatible) ───────────────────────────────────
 async function htmlToPDF(html) {
-  // On Vercel: use @sparticuz/chromium + puppeteer-core
-  // Locally: use puppeteer directly
-  let browser
-  try {
-    // Try Vercel/Lambda approach first
-    const chromium = require('@sparticuz/chromium')
-    const puppeteer = require('puppeteer-core')
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    })
-  } catch {
-    // Fallback to local puppeteer
-    const puppeteer = require('puppeteer')
-    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] })
-  }
+  const chromium = require('@sparticuz/chromium')
+  const puppeteer = require('puppeteer-core')
+
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
+  })
 
   try {
     const page = await browser.newPage()
