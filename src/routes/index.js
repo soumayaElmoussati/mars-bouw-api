@@ -58,6 +58,11 @@ router.put   ('/finance/uitgaven/:id',          fi.updateUitgave)
 router.delete('/finance/uitgaven/:id',          fi.deleteUitgave)
 router.get   ('/finance/stats',                 fi.getStats)
 
+// PDF Generation
+const pdf = require('../controllers/pdfController')
+router.get('/pdf/offerte/:id', pdf.getOffertePDF)
+router.get('/pdf/factuur/:id', pdf.getFactuurPDF)
+
 // Time tracking
 const tt = require('../controllers/timetrackingController')
 router.get   ('/timetracking/workers',             tt.getWorkers)
