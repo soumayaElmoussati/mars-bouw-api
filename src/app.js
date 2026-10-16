@@ -16,6 +16,7 @@ const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || '')
   .filter(Boolean)
   .concat([
     'https://mars-bouw-app-three.vercel.app',
+    'https://mars-bouw-app.vercel.app',
     'http://localhost:5173',
     'http://localhost:3000',
   ])
