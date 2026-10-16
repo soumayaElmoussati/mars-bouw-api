@@ -264,7 +264,6 @@ function buildHTML(data) {
 </html>`
 }
 
-// ── PDF via Chromium (Vercel compatible) ───────────────────────────────────
 // ── PDF via Chromium ───────────────────────────────────────────────────────
 async function htmlToPDF(html) {
   const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL
@@ -272,9 +271,9 @@ async function htmlToPDF(html) {
   let browser
 
   if (isProd) {
-    // Vercel / AWS Lambda
-    const chromium  = require('@sparticuz/chromium')
-    const puppeteer = require('puppeteer-core')
+    // Vercel / AWS Lambda — utiliser import() dynamique car ce sont des ESM
+    const { default: chromium } = await import('@sparticuz/chromium')
+    const { default: puppeteer } = await import('puppeteer-core')
 
     browser = await puppeteer.launch({
       args: chromium.args,
@@ -283,9 +282,9 @@ async function htmlToPDF(html) {
       headless: chromium.headless,
     })
   } else {
-    // Local dev — utilise puppeteer (ESM) via import dynamique
-    const puppeteer = await import('puppeteer')
-    browser = await puppeteer.default.launch({
+    // Local dev — puppeteer est aussi ESM
+    const { default: puppeteer } = await import('puppeteer')
+    browser = await puppeteer.launch({
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       headless: 'new',
     })
