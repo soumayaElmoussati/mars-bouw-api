@@ -1,16 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// FIX CRITIQUE POUR VERCEL
+// FIX VERCEL + NODE.JS 22 — @sparticuz/chromium-min + LD_LIBRARY_PATH
 // ───────────────────────────────────────────────────────────────────────────
-// @sparticuz/chromium vérifie AWS_LAMBDA_JS_RUNTIME au moment où il est
-// importé. Sur Vercel avec Node.js 22, cette variable n'est pas définie,
-// ce qui empêche le module de détecter l'environnement serverless et donc
-// d'extraire les bibliothèques NSS (libnspr4.so, libnss3.so, etc.).
+// Sur Vercel avec Fluid Compute, la variable AWS_LAMBDA_JS_RUNTIME n'est plus
+// accessible. @sparticuz/chromium-min permet de forcer le téléchargement du
+// pack Chromium via une URL explicite, ce qui garantit l'extraction des
+// bibliothèques NSS (libnspr4.so, libnss3.so, etc.) dans /tmp.
 //
-// On la définit donc AVANT tout require/import de @sparticuz/chromium.
+// Le LD_LIBRARY_PATH est ensuite configuré pour indiquer au linker Linux
+// où trouver ces bibliothèques.
 // ═══════════════════════════════════════════════════════════════════════════
-if (!process.env.AWS_LAMBDA_JS_RUNTIME) {
-  process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x'
-}
 
 const { query } = require('../db/pool')
 const fs   = require('fs')
@@ -280,19 +278,21 @@ function buildHTML(data) {
 
 // ── PDF via Chromium (Vercel + local compatible) ───────────────────────────
 async function htmlToPDF(html) {
-  // Import dynamique : obligatoire car @sparticuz/chromium et puppeteer-core
-  // sont des modules ESM, et ce fichier est en CommonJS.
-  const chromiumModule  = await import('@sparticuz/chromium')
+  // Import dynamique : @sparticuz/chromium-min et puppeteer-core sont ESM
+  const chromiumModule  = await import('@sparticuz/chromium-min')
   const puppeteerModule = await import('puppeteer-core')
 
   const chromium  = chromiumModule.default  || chromiumModule
   const puppeteer = puppeteerModule.default || puppeteerModule
 
-  // Détection serverless (Vercel / AWS Lambda / Netlify Functions)
+  // ⚠️ URL du pack Chromium — DOIT correspondre à la version installée
+  // et inclure le suffixe d'architecture (.x64.tar pour Vercel x64)
+  const CHROMIUM_PACK_URL = 'https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar'
+
+  // Détection serverless
   const isServerless = !!(
     process.env.VERCEL ||
     process.env.VERCEL_ENV ||
-    process.env.AWS_LAMBDA_JS_RUNTIME ||
     process.env.AWS_LAMBDA_FUNCTION_NAME ||
     process.env.AWS_EXECUTION_ENV ||
     process.env.NETLIFY
@@ -304,18 +304,17 @@ async function htmlToPDF(html) {
   let launchHeadless
 
   if (isServerless) {
-    // ── Environnement serverless (Vercel) ──
-    executablePath = await chromium.executablePath()
+    // 🔑 Passer l'URL explicitement force la décompression des .so
+    executablePath = await chromium.executablePath(CHROMIUM_PACK_URL)
 
-    // 🔑 CORRECTIF CRITIQUE : indiquer au linker Linux où trouver les .so
-    // (libnspr4.so, libnss3.so, etc.) extraites par @sparticuz/chromium
+    // 🔑 CRITIQUE : indiquer au linker Linux où trouver libnspr4.so, libnss3.so, etc.
     process.env.LD_LIBRARY_PATH = path.dirname(executablePath)
 
     launchArgs     = chromium.args
     launchViewport = chromium.defaultViewport
     launchHeadless = chromium.headless
   } else {
-    // ── Environnement local (dev) : cherche Chrome installé sur la machine ──
+    // ── Environnement local : cherche Chrome installé sur la machine ──
     const localCandidates = [
       process.env.PUPPETEER_EXECUTABLE_PATH,
       process.env.CHROME_PATH,
