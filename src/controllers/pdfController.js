@@ -1,270 +1,414 @@
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib')
-const fs      = require('fs')
-const path    = require('path')
 const { query } = require('../db/pool')
+const fs   = require('fs')
+const path = require('path')
 
-const NAVY  = rgb(0.102, 0.243, 0.435)
-const RED   = rgb(0.784, 0.063, 0.180)
-const LIGHT = rgb(0.957, 0.969, 0.988)
-const GREY  = rgb(0.416, 0.557, 0.659)
-const TEXT  = rgb(0.102, 0.102, 0.180)
-const WHITE = rgb(1, 1, 1)
-const BORDER= rgb(0.816, 0.863, 0.941)
+// ── Logo base64 (embedded once at startup) ─────────────────────────────────
+let LOGO_B64 = ''
+try {
+  const logoPath = path.join(__dirname, '../../public/logo.png')
+  if (fs.existsSync(logoPath)) {
+    LOGO_B64 = 'data:image/png;base64,' + fs.readFileSync(logoPath).toString('base64')
+  }
+} catch {}
 
+// ── Helpers ────────────────────────────────────────────────────────────────
 function fmtEur(n) {
-  return '€ ' + Number(n || 0).toLocaleString('nl-NL', { minimumFractionDigits: 2 })
+  return '€\u00a0' + Number(n || 0).toLocaleString('nl-NL', { minimumFractionDigits: 2 })
 }
 function fmtDate(d) {
   if (!d) return '—'
   return d.toString().slice(0, 10).split('-').reverse().join('-')
 }
 
-async function buildPDF(data) {
-  const pdfDoc = await PDFDocument.create()
-  const page   = pdfDoc.addPage([595, 842])
-  const { width, height } = page.getSize()
+// ── HTML template ──────────────────────────────────────────────────────────
+function buildHTML(data) {
+  const logoTag = LOGO_B64
+    ? `<img src="${LOGO_B64}" class="logo" alt="MARS Bouw">`
+    : `<div class="logo-text">MARS BOUW</div>`
 
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
-  const fontReg  = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const clientHtml = (data.clientLines || [])
+    .filter(Boolean)
+    .map((ln, i) => `<p class="${i === 0 ? 'client-name' : 'client-addr'}">${ln}</p>`)
+    .join('')
 
-  let logoImage = null
-  try {
-    const logoPath = path.join(__dirname, '../../public/logo.png')
-    if (fs.existsSync(logoPath)) {
-      logoImage = await pdfDoc.embedPng(fs.readFileSync(logoPath))
+  const metaHtml = (data.meta || [])
+    .map(([label, val]) => `
+      <tr>
+        <td class="meta-label">${label}</td>
+        <td class="meta-val">${val}</td>
+      </tr>`)
+    .join('')
+
+  const hdrs = data.headers || []
+  const theadHtml = hdrs
+    .map((h, i) => `<th style="text-align:${i >= 2 ? 'right' : 'left'}">${h}</th>`)
+    .join('')
+
+  const tbodyHtml = (data.rows || [])
+    .map((row, ri) => {
+      const bg = ri % 2 === 0 ? '#F4F7FB' : '#FFFFFF'
+      const cells = row.map((val, ci) => {
+        const align  = ci >= 2 ? 'right' : 'left'
+        const weight = ci === row.length - 1 ? '600' : '400'
+        return `<td style="text-align:${align};font-weight:${weight}">${val}</td>`
+      }).join('')
+      return `<tr style="background:${bg}">${cells}</tr>`
+    })
+    .join('')
+
+  const notesHtml = (data.notes || [])
+    .filter(Boolean)
+    .map(n => `<p class="note">${n}</p>`)
+    .join('')
+
+  const totals = data.totals || []
+  const totalsHtml = totals.map(([label, val], i) => {
+    if (i < totals.length - 1) {
+      return `<tr class="total-row">
+        <td class="total-label">${label}</td>
+        <td class="total-val">${val}</td>
+      </tr>`
     }
-  } catch (e) {}
+    return `<tr>
+      <td colspan="2" style="padding-top:4pt">
+        <div class="total-final">
+          <span>${label}</span>
+          <span>${val}</span>
+        </div>
+      </td>
+    </tr>`
+  }).join('')
 
-  const ML = 45
-  const MR = 45
-  const CW = width - ML - MR
+  const footerHtml = (data.footer || [])
+    .map((ln, i) => `<span class="${i === data.footer.length - 1 ? 'footer-sig' : ''}">${ln}</span>`)
+    .join('')
 
-  function txt(str, x, y, { font = fontReg, size = 9, color = TEXT } = {}) {
-    page.drawText(String(str || ''), { x, y: height - y, font, size, color })
-  }
-  function rct(x, y, w, h, color, opacity = 1) {
-    page.drawRectangle({ x, y: height - y - h, width: w, height: h, color, opacity })
-  }
-  function txtR(str, rightX, y, opts = {}) {
-    const f  = opts.font || fontReg
-    const sz = opts.size || 9
-    const tw = f.widthOfTextAtSize(String(str || ''), sz)
-    txt(str, rightX - tw, y, opts)
-  }
-  function ln(x1, y, x2, color = BORDER, thickness = 0.5) {
-    page.drawLine({ start:{x:x1,y:height-y}, end:{x:x2,y:height-y}, thickness, color })
-  }
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
 
-  // Top bar
-  rct(0, 0, width, 6, NAVY)
-
-  // Logo
-  if (logoImage) {
-    const d = logoImage.scaleToFit(130, 55)
-    page.drawImage(logoImage, { x: ML, y: height - 18 - d.height, width: d.width, height: d.height })
-  } else {
-    txt('MARS BOUW', ML, 22, { font: fontBold, size: 18, color: NAVY })
+  body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 9.5pt;
+    color: #1A1A2E;
+    background: white;
   }
 
-  // Company info right
-  const co = [
-    { t:'MARS Bouw',               b:true,  s:10   },
-    { t:'Haarlemmerweg 555 1-hg',  b:false, s:8.5  },
-    { t:'1055PN Amsterdam',         b:false, s:8.5  },
-    { t:'',                         b:false, s:4    },
-    { t:'T. +31 6 24 204 476',     b:false, s:8.5  },
-    { t:'bnibounsar@live.nl',       b:false, s:8.5  },
-    { t:'',                         b:false, s:4    },
-    { t:'KvK: 65036441',           b:false, s:7.5  },
-    { t:'BTW: NL 002437498b14',    b:false, s:7.5  },
-    { t:'IBAN: NL56ABNA0555251608',b:false, s:7.5  },
-  ]
-  let cy = 16
-  for (const c of co) {
-    if (!c.t) { cy += c.s; continue }
-    const f  = c.b ? fontBold : fontReg
-    const tw = f.widthOfTextAtSize(c.t, c.s)
-    txt(c.t, width - MR - tw, cy, { font:f, size:c.s, color: c.b ? NAVY : TEXT })
-    cy += c.s + 3.5
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 15mm 18mm 28mm 18mm;
   }
 
-  // Red separator
-  const sepY = 93
-  rct(ML, sepY, CW, 1.5, RED)
+  /* ── HEADER ── */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 5mm;
+    border-bottom: 0.8px solid #D0DCF0;
+    margin-bottom: 6mm;
+  }
+  .logo { height: 55pt; width: auto; }
+  .logo-text { font-size: 18pt; font-weight: 800; color: #1A3E6F; }
 
-  // Doc type
-  txt(data.type, ML, sepY + 18, { font:fontBold, size:24, color:NAVY })
+  .company-info { text-align: right; }
+  .company-name { font-size: 10pt; font-weight: 700; color: #1A3E6F; line-height: 1.8; }
+  .company-line { font-size: 8pt; color: #555; line-height: 1.6; }
+  .company-meta { font-size: 7.5pt; color: #888; margin-top: 3pt; line-height: 1.6; }
 
-  // Client block
-  const clY = sepY + 36
-  const clH = data.clientLines.length * 15 + 14
-  rct(ML, clY, 3, clH, NAVY)
-  rct(ML, clY, 200, clH, LIGHT, 0.7)
-  let cly2 = clY + 6
-  for (let i = 0; i < data.clientLines.length; i++) {
-    const ln2 = data.clientLines[i]
-    if (!ln2) { cly2 += 6; continue }
-    txt(ln2, ML + 8, cly2, { font: i===0 ? fontBold : fontReg, size: i===0 ? 9.5 : 8.5, color: i===0 ? NAVY : TEXT })
-    cly2 += 15
+  /* ── DOC TYPE ── */
+  .doc-type {
+    font-size: 21pt;
+    font-weight: 800;
+    color: #1A3E6F;
+    letter-spacing: -0.02em;
+    margin-bottom: 5mm;
   }
 
-  // Meta box
-  const mX = width/2 + 10
-  const mY = clY
-  const mH = data.meta.length * 17 + 12
-  rct(mX, mY, width - MR - mX, mH, LIGHT, 0.6)
-  let my2 = mY + 8
-  for (const [label, val] of data.meta) {
-    txt(label, mX + 8, my2, { font:fontReg, size:8, color:GREY })
-    txt(val,   mX + 100, my2, { font:fontBold, size:8.5, color:NAVY })
-    my2 += 17
+  /* ── CLIENT + META ROW ── */
+  .info-row {
+    display: flex;
+    gap: 6mm;
+    margin-bottom: 7mm;
+    align-items: stretch;
+  }
+  .client-block {
+    flex: 1;
+    border-left: 3px solid #1A3E6F;
+    background: #F4F7FB;
+    padding: 5mm 6mm;
+  }
+  .client-name { font-size: 10pt; font-weight: 700; color: #1A3E6F; margin-bottom: 3pt; }
+  .client-addr { font-size: 8.5pt; color: #444; line-height: 1.6; }
+
+  .meta-block { min-width: 105mm; padding: 3mm 0 3mm 6mm; }
+  .meta-block table { border-collapse: collapse; width: 100%; }
+  .meta-label { font-size: 8.5pt; color: #888; padding: 3.5pt 12pt 3.5pt 0; white-space: nowrap; vertical-align: middle; }
+  .meta-val   { font-size: 9pt; font-weight: 700; color: #1A3E6F; padding: 3.5pt 0; vertical-align: middle; }
+
+  /* ── TABLE ── */
+  .items-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 5mm;
+  }
+  .items-table thead tr { background: #1A3E6F; }
+  .items-table thead th {
+    color: white;
+    font-size: 8.5pt;
+    font-weight: 600;
+    padding: 7pt 7pt;
+    letter-spacing: 0.01em;
+    vertical-align: middle;
+  }
+  .items-table tbody tr { border-bottom: 0.3px solid #D8E4F0; }
+  .items-table tbody td {
+    font-size: 9pt;
+    padding: 7pt 7pt;
+    color: #1A1A2E;
+    vertical-align: middle;
+    line-height: 1.35;
   }
 
-  // Table
-  const tblY = Math.max(cly2, mY + mH) + 16
-  const ROW_H = 20
-
-  // Header
-  rct(ML, tblY, CW, 22, NAVY)
-  let hx = ML
-  for (let i = 0; i < data.headers.length; i++) {
-    const isR = i >= 2
-    if (isR) txtR(data.headers[i], hx + data.colWidths[i] - 3, tblY + 7, { font:fontBold, size:7.5, color:WHITE })
-    else     txt(data.headers[i], hx + 4, tblY + 7, { font:fontBold, size:7.5, color:WHITE })
-    hx += data.colWidths[i]
+  /* ── NOTES ── */
+  .note {
+    font-size: 8pt;
+    color: #888;
+    font-style: italic;
+    margin-bottom: 2pt;
+    margin-top: 3mm;
   }
 
-  // Rows
-  let ry = tblY + 22
-  for (let ri = 0; ri < data.rows.length; ri++) {
-    const row = data.rows[ri]
-    rct(ML, ry, CW, ROW_H, ri%2===0 ? LIGHT : WHITE, ri%2===0 ? 0.7 : 1)
-    ln(ML, ry + ROW_H, ML + CW, BORDER, 0.3)
-    let rx = ML
-    for (let ci = 0; ci < row.length; ci++) {
-      const val = String(row[ci] || '')
-      const cw  = data.colWidths[ci]
-      const isR = ci >= 2
-      if (isR) txtR(val, rx + cw - 3, ry + 6, { font:fontReg, size:8, color:TEXT })
-      else     txt(val, rx + 4, ry + 6, { font:fontReg, size:8, color:TEXT })
-      rx += cw
-    }
-    ry += ROW_H
+  /* ── TOTALS ── */
+  .totals-wrap { display: flex; justify-content: flex-end; margin-top: 5mm; }
+  .totals-table { width: 80mm; border-collapse: collapse; }
+  .total-row td { padding: 4pt 0; font-size: 9pt; }
+  .total-label { color: #888; }
+  .total-val { text-align: right; font-weight: 600; color: #1A1A2E; }
+
+  .total-final {
+    background: #1A3E6F;
+    color: white;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7pt 9pt;
+    border-radius: 4px;
+    font-size: 11pt;
+    font-weight: 700;
+    margin-top: 3pt;
   }
 
-  // Notes
-  let noteY = ry + 8
-  for (const note of (data.notes || [])) {
-    txt(note, ML, noteY, { font:fontReg, size:7.5, color:RED })
-    noteY += 13
+  /* ── FOOTER ── */
+  .footer {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: #F4F7FB;
+    border-top: 0.7px solid #D0DCF0;
+    padding: 5mm 18mm;
+    display: flex;
+    flex-direction: column;
+    gap: 3pt;
   }
+  .footer span { font-size: 7.5pt; color: #777; line-height: 1.5; }
+  .footer .footer-sig { font-weight: 600; color: #1A3E6F; }
 
-  // Totals
-  const totals = data.totals
-  const tW = 195
-  const tX = width - MR - tW
-  let   tY = noteY + 8
-  const tH = (totals.length - 1) * 18 + 38
-  rct(tX, tY, tW, tH, LIGHT, 0.6)
-
-  let ty2 = tY + 8
-  for (let i = 0; i < totals.length - 1; i++) {
-    const [label, val] = totals[i]
-    txt(label, tX + 6, ty2, { font:fontReg, size:8.5, color:GREY })
-    txtR(val, tX + tW - 6, ty2, { font:fontBold, size:8.5, color:TEXT })
-    ty2 += 18
+  .page-num {
+    position: fixed;
+    bottom: 4mm; right: 18mm;
+    font-size: 7pt; color: #bbb;
   }
-  ln(tX + 6, ty2, tX + tW - 6, BORDER, 0.5)
-  ty2 += 6
+</style>
+</head>
+<body>
+<div class="page">
 
-  // Final total
-  rct(tX, ty2, tW, 24, NAVY)
-  const [fLabel, fVal] = totals[totals.length - 1]
-  txt(fLabel, tX + 6, ty2 + 8, { font:fontBold, size:10, color:WHITE })
-  txtR(fVal, tX + tW - 6, ty2 + 8, { font:fontBold, size:10, color:WHITE })
+  <div class="header">
+    ${logoTag}
+    <div class="company-info">
+      <div class="company-name">MARS Bouw</div>
+      <div class="company-line">Haarlemmerweg 555 1-hg</div>
+      <div class="company-line">1055PN Amsterdam</div>
+      <div class="company-line">T. +31 6 24 204 476 · bnibounsar@live.nl</div>
+      <div class="company-meta">KvK: 65036441 · BTW: NL 002437498b14</div>
+      <div class="company-meta">IBAN: NL56ABNA0555251608</div>
+    </div>
+  </div>
 
-  // Footer
-  const footerY = height - 80
-  ln(0, footerY - 1, width, RED, 1.5)
-  rct(0, footerY, width, 80, LIGHT, 0.5)
-  let fy = footerY + 10
-  for (const fl of (data.footer || [])) {
-    txt(fl, ML, fy, { font: fl.startsWith('Met') ? fontBold : fontReg, size:7.5, color: fl.startsWith('Met') ? NAVY : GREY })
-    fy += 12
-  }
-  txtR('Pagina 1 / 1', width - MR, height - 10, { font:fontReg, size:7, color:GREY })
+  <div class="doc-type">${data.type}</div>
 
-  return await pdfDoc.save()
+  <div class="info-row">
+    <div class="client-block">${clientHtml}</div>
+    <div class="meta-block"><table>${metaHtml}</table></div>
+  </div>
+
+  <table class="items-table">
+    <thead><tr>${theadHtml}</tr></thead>
+    <tbody>${tbodyHtml}</tbody>
+  </table>
+
+  ${notesHtml}
+
+  <div class="totals-wrap">
+    <table class="totals-table">${totalsHtml}</table>
+  </div>
+
+  <div class="footer">${footerHtml}</div>
+  <div class="page-num">Pagina 1 / 1</div>
+</div>
+</body>
+</html>`
 }
 
-// ── OFFERTE ────────────────────────────────────────────────────────────────
+// ── PDF via Chromium (Vercel compatible) ───────────────────────────────────
+async function htmlToPDF(html) {
+  // On Vercel: use @sparticuz/chromium + puppeteer-core
+  // Locally: use puppeteer directly
+  let browser
+  try {
+    // Try Vercel/Lambda approach first
+    const chromium = require('@sparticuz/chromium')
+    const puppeteer = require('puppeteer-core')
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    })
+  } catch {
+    // Fallback to local puppeteer
+    const puppeteer = require('puppeteer')
+    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  }
+
+  try {
+    const page = await browser.newPage()
+    await page.setContent(html, { waitUntil: 'networkidle0' })
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: 0, right: 0, bottom: 0, left: 0 },
+    })
+    return pdf
+  } finally {
+    await browser.close()
+  }
+}
+
+// ── OFFERTE endpoint ───────────────────────────────────────────────────────
 exports.getOffertePDF = async (req, res, next) => {
   try {
-    const { rows:[offerte] } = await query('SELECT * FROM offertes WHERE id=$1', [req.params.id])
-    if (!offerte) return res.status(404).json({ error:'Not found' })
-    const { rows:lines } = await query('SELECT * FROM offerte_lines WHERE offerte_id=$1 ORDER BY sort_order', [req.params.id])
+    const { rows: [o] } = await query('SELECT * FROM offertes WHERE id=$1', [req.params.id])
+    if (!o) return res.status(404).json({ error: 'Not found' })
+    const { rows: lines } = await query(
+      'SELECT * FROM offerte_lines WHERE offerte_id=$1 ORDER BY sort_order', [req.params.id]
+    )
 
-    const subtotal = lines.reduce((s,l) => s + (+l.qty * +l.unit_price), 0)
-    const btwAmt   = lines.reduce((s,l) => s + (+l.qty * +l.unit_price * +l.btw/100), 0)
+    const sub = lines.reduce((s, l) => s + +l.qty * +l.unit_price, 0)
+    const btw = lines.reduce((s, l) => s + +l.qty * +l.unit_price * +l.btw / 100, 0)
 
-    const pdfBytes = await buildPDF({
+    const html = buildHTML({
       type: 'OFFERTE',
-      clientLines: [`Aan: ${offerte.client_name||''}`, offerte.client_address||''].filter(Boolean),
+      clientLines: [`Aan: ${o.client_name || ''}`, o.client_address || ''].filter(Boolean),
       meta: [
-        ['Datum:', fmtDate(offerte.date)],
-        ['Offerte nr.:', offerte.offerte_number||'—'],
-        ['Geldigheid:', `${offerte.valid_days||14} dagen`],
+        ['Datum:',       fmtDate(o.date)],
+        ['Offerte nr.:',  o.offerte_number || '—'],
+        ['Geldigheid:',  `${o.valid_days || 14} dagen`],
       ],
-      headers:   ['Omschrijving','Aantal','Tarief','BTW','Bedrag'],
-      colWidths: [210,55,70,45,75],
-      rows: lines.map(l => [l.description||'', Number(l.qty||0).toFixed(2).replace('.',','), fmtEur(l.unit_price), `${l.btw||0}%`, fmtEur(+l.qty * +l.unit_price)]),
-      notes: offerte.notes ? [`ℹ  ${offerte.notes}`] : [],
-      totals: [['Subtotaal excl. BTW', fmtEur(subtotal)], ['BTW', fmtEur(btwAmt)], ['Totaal incl. BTW', fmtEur(subtotal+btwAmt)]],
-      footer: ['Betaling en leveringsvoorwaarden:', '• 50% bij de opdracht dient in bezit te zijn alvorens de opdracht in behandeling is genomen.', '• 40% als 70% van het werk gedaan is.   • 10% na opleveren binnen de afgesproken termijn.', 'Op alle leveringen, diensten en aanbiedingen gelden onze Algemene Leveringsvoorwaarden.', 'Met vriendelijke groet,  Mohamed El Mourabit  —  MARS Bouw'],
+      headers: ['Omschrijving', 'Aantal', 'Tarief', 'BTW', 'Bedrag'],
+      rows: lines.map(l => [
+        l.description || '',
+        Number(l.qty || 0).toFixed(2).replace('.', ','),
+        fmtEur(l.unit_price),
+        `${l.btw || 0}%`,
+        fmtEur(+l.qty * +l.unit_price),
+      ]),
+      notes: o.notes ? [o.notes] : [],
+      totals: [
+        ['Subtotaal excl. BTW', fmtEur(sub)],
+        ['BTW',                 fmtEur(btw)],
+        ['Totaal incl. BTW',    fmtEur(sub + btw)],
+      ],
+      footer: [
+        'Betaling: 50% bij opdracht · 40% als 70% gedaan · 10% na oplevering binnen de afgesproken termijn.',
+        'Op alle leveringen gelden onze Algemene Leveringsvoorwaarden, op verzoek verstrekt.',
+        'Met vriendelijke groet,  Mohamed El Mourabit  —  MARS Bouw',
+      ],
     })
 
-    const fn = `offerte-${offerte.offerte_number||req.params.id}.pdf`
-    res.setHeader('Content-Type','application/pdf')
-    res.setHeader('Content-Disposition', req.query.download==='1' ? `attachment; filename="${fn}"` : `inline; filename="${fn}"`)
-    res.setHeader('Content-Length', pdfBytes.length)
-    res.end(Buffer.from(pdfBytes))
+    const pdf = await htmlToPDF(html)
+    const fn  = `offerte-${o.offerte_number || req.params.id}.pdf`
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition',
+      req.query.download === '1' ? `attachment; filename="${fn}"` : `inline; filename="${fn}"`
+    )
+    res.setHeader('Content-Length', pdf.length)
+    res.end(pdf)
   } catch (err) { next(err) }
 }
 
-// ── FACTUUR ────────────────────────────────────────────────────────────────
+// ── FACTUUR endpoint ───────────────────────────────────────────────────────
 exports.getFactuurPDF = async (req, res, next) => {
   try {
-    const { rows:[factuur] } = await query('SELECT * FROM facturen WHERE id=$1', [req.params.id])
-    if (!factuur) return res.status(404).json({ error:'Not found' })
-    const { rows:lines } = await query('SELECT * FROM factuur_lines WHERE factuur_id=$1 ORDER BY sort_order', [req.params.id])
-    const { rows:[pmts] } = await query('SELECT COALESCE(SUM(amount),0) AS paid FROM factuur_payments WHERE factuur_id=$1', [req.params.id])
+    const { rows: [f] } = await query('SELECT * FROM facturen WHERE id=$1', [req.params.id])
+    if (!f) return res.status(404).json({ error: 'Not found' })
+    const { rows: lines } = await query(
+      'SELECT * FROM factuur_lines WHERE factuur_id=$1 ORDER BY sort_order', [req.params.id]
+    )
+    const { rows: [pmts] } = await query(
+      'SELECT COALESCE(SUM(amount),0) AS paid FROM payments WHERE factuur_id=$1', [req.params.id]
+    )
 
-    const subtotal  = lines.reduce((s,l) => s + (+l.qty * +l.unit_price), 0)
-    const btwAmt    = lines.reduce((s,l) => s + (+l.qty * +l.unit_price * +l.btw/100), 0)
-    const total     = subtotal + btwAmt
-    const paid      = +pmts.paid
+    const sub  = lines.reduce((s, l) => s + +l.qty * +l.unit_price, 0)
+    const btw  = lines.reduce((s, l) => s + +l.qty * +l.unit_price * +l.btw / 100, 0)
+    const tot  = sub + btw
+    const paid = +pmts.paid
 
-    const pdfBytes = await buildPDF({
+    const html = buildHTML({
       type: 'FACTUUR',
-      clientLines: [`Aan: ${factuur.client_name||''}`, factuur.client_address||''].filter(Boolean),
+      clientLines: [`Aan: ${f.client_name || ''}`, f.client_address || ''].filter(Boolean),
       meta: [
-        ['Factuurnummer:', factuur.factuur_number||'—'],
-        ['Factuurdatum:',  fmtDate(factuur.date)],
-        ['Vervaldatum:',   fmtDate(factuur.due_date)],
+        ['Factuurnummer:', f.factuur_number || '—'],
+        ['Factuurdatum:',  fmtDate(f.date)],
+        ['Vervaldatum:',   fmtDate(f.due_date)],
         ['Betaaltermijn:', '14 dagen'],
       ],
-      headers:   ['Omschrijving','Aantal','Eenheid','Tarief','Subtotaal','BTW%'],
-      colWidths: [185,45,45,65,65,50],
-      rows: lines.map(l => [l.description||'', Number(l.qty||0).toFixed(0), l.unit||'stuk', fmtEur(l.unit_price), fmtEur(+l.qty * +l.unit_price), `${l.btw||0}%`]),
-      notes: [`t.n.v. MARS Bouw o.v.v. factuurnummer ${factuur.factuur_number}  |  IBAN: NL56ABNA0555251608`, paid>0 ? `Reeds betaald: ${fmtEur(paid)}  |  Resterend: ${fmtEur(total-paid)}` : ''].filter(Boolean),
-      totals: [['Subtotaal excl. BTW', fmtEur(subtotal)], ['BTW 21%', fmtEur(btwAmt)], ['Totaal te betalen', fmtEur(total)]],
-      footer: ['Op alle leveringen, diensten en aanbiedingen gelden onze Algemene Leveringsvoorwaarden.', '• Betaling binnen 14 dagen na factuurdatum.', '• Bij te late betaling wordt wettelijke rente in rekening gebracht.', '• Gelieve het factuurnummer te vermelden bij uw betaling.', 'Met vriendelijke groet,  Mohamed El Mourabit  —  MARS Bouw'],
+      headers: ['Omschrijving', 'Aantal', 'Eenheid', 'Tarief', 'Subtotaal', 'BTW%'],
+      rows: lines.map(l => [
+        l.description || '',
+        Number(l.qty || 0).toFixed(0),
+        l.unit || 'stuk',
+        fmtEur(l.unit_price),
+        fmtEur(+l.qty * +l.unit_price),
+        `${l.btw || 0}%`,
+      ]),
+      notes: [
+        `Betaling t.n.v. MARS Bouw o.v.v. factuurnummer ${f.factuur_number} · IBAN: NL56ABNA0555251608`,
+        paid > 0 ? `Reeds betaald: ${fmtEur(paid)}  —  Resterend: ${fmtEur(tot - paid)}` : '',
+      ].filter(Boolean),
+      totals: [
+        ['Subtotaal excl. BTW', fmtEur(sub)],
+        ['BTW 21%',             fmtEur(btw)],
+        ['Totaal te betalen',   fmtEur(tot)],
+      ],
+      footer: [
+        'Betaling binnen 14 dagen na factuurdatum · Bij te late betaling wordt wettelijke rente in rekening gebracht.',
+        'Op alle leveringen gelden onze Algemene Leveringsvoorwaarden, op verzoek verstrekt.',
+        'Met vriendelijke groet,  Mohamed El Mourabit  —  MARS Bouw',
+      ],
     })
 
-    const fn = `factuur-${factuur.factuur_number||req.params.id}.pdf`
-    res.setHeader('Content-Type','application/pdf')
-    res.setHeader('Content-Disposition', req.query.download==='1' ? `attachment; filename="${fn}"` : `inline; filename="${fn}"`)
-    res.setHeader('Content-Length', pdfBytes.length)
-    res.end(Buffer.from(pdfBytes))
+    const pdf = await htmlToPDF(html)
+    const fn  = `factuur-${f.factuur_number || req.params.id}.pdf`
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition',
+      req.query.download === '1' ? `attachment; filename="${fn}"` : `inline; filename="${fn}"`
+    )
+    res.setHeader('Content-Length', pdf.length)
+    res.end(pdf)
   } catch (err) { next(err) }
 }
