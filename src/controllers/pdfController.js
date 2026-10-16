@@ -1,3 +1,17 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX CRITIQUE POUR VERCEL
+// ───────────────────────────────────────────────────────────────────────────
+// @sparticuz/chromium vérifie AWS_LAMBDA_JS_RUNTIME au moment où il est
+// importé. Sur Vercel avec Node.js 22, cette variable n'est pas définie,
+// ce qui empêche le module de détecter l'environnement serverless et donc
+// d'extraire les bibliothèques NSS (libnspr4.so, libnss3.so, etc.).
+//
+// On la définit donc AVANT tout require/import de @sparticuz/chromium.
+// ═══════════════════════════════════════════════════════════════════════════
+if (!process.env.AWS_LAMBDA_JS_RUNTIME) {
+  process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x'
+}
+
 const { query } = require('../db/pool')
 const fs   = require('fs')
 const path = require('path')
@@ -272,12 +286,13 @@ async function htmlToPDF(html) {
   const puppeteerModule = await import('puppeteer-core')
 
   const chromium  = chromiumModule.default  || chromiumModule
-  const puppeteer = puppeteerModule.default || puppeteurModule
+  const puppeteer = puppeteerModule.default || puppeteerModule
 
   // Détection serverless (Vercel / AWS Lambda / Netlify Functions)
   const isServerless = !!(
     process.env.VERCEL ||
     process.env.VERCEL_ENV ||
+    process.env.AWS_LAMBDA_JS_RUNTIME ||
     process.env.AWS_LAMBDA_FUNCTION_NAME ||
     process.env.AWS_EXECUTION_ENV ||
     process.env.NETLIFY
