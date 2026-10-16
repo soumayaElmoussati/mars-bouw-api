@@ -1,13 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// FIX VERCEL + NODE.JS 22 — @sparticuz/chromium-min + LD_LIBRARY_PATH
+// PDF GENERATION — html-pdf-lite
 // ───────────────────────────────────────────────────────────────────────────
-// Sur Vercel avec Fluid Compute, la variable AWS_LAMBDA_JS_RUNTIME n'est plus
-// accessible. @sparticuz/chromium-min permet de forcer le téléchargement du
-// pack Chromium via une URL explicite, ce qui garantit l'extraction des
-// bibliothèques NSS (libnspr4.so, libnss3.so, etc.) dans /tmp.
-//
-// Le LD_LIBRARY_PATH est ensuite configuré pour indiquer au linker Linux
-// où trouver ces bibliothèques.
+// Solution serverless-friendly : aucune dépendance Chromium, aucun binaire
+// système, aucune bibliothèque NSS à extraire. Fonctionne sur Vercel, AWS
+// Lambda, Netlify Functions et en local sans configuration.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const { query } = require('../db/pool')
@@ -276,92 +272,16 @@ function buildHTML(data) {
 </html>`
 }
 
-// ── PDF via Chromium (Vercel + local compatible) ───────────────────────────
+// ── PDF via html-pdf-lite (serverless + local, no Chromium) ────────────────
 async function htmlToPDF(html) {
-  // Import dynamique : @sparticuz/chromium-min et puppeteer-core sont ESM
-  const chromiumModule  = await import('@sparticuz/chromium-min')
-  const puppeteerModule = await import('puppeteer-core')
+  // html-pdf-lite est un module CommonJS → require() direct fonctionne
+  const { renderPdfFromHtml } = require('html-pdf-lite')
 
-  const chromium  = chromiumModule.default  || chromiumModule
-  const puppeteer = puppeteerModule.default || puppeteerModule
-
-  // ⚠️ URL du pack Chromium — DOIT correspondre à la version installée
-  // et inclure le suffixe d'architecture (.x64.tar pour Vercel x64)
-  const CHROMIUM_PACK_URL = 'https://github.com/Sparticuz/chromium/releases/download/v141.0.0/chromium-v141.0.0-pack.x64.tar'
-
-  // Détection serverless
-  const isServerless = !!(
-    process.env.VERCEL ||
-    process.env.VERCEL_ENV ||
-    process.env.AWS_LAMBDA_FUNCTION_NAME ||
-    process.env.AWS_EXECUTION_ENV ||
-    process.env.NETLIFY
-  )
-
-  let executablePath
-  let launchArgs
-  let launchViewport
-  let launchHeadless
-
-  if (isServerless) {
-    // 🔑 Passer l'URL explicitement force la décompression des .so
-    executablePath = await chromium.executablePath(CHROMIUM_PACK_URL)
-
-    // 🔑 CRITIQUE : indiquer au linker Linux où trouver libnspr4.so, libnss3.so, etc.
-    process.env.LD_LIBRARY_PATH = path.dirname(executablePath)
-
-    launchArgs     = chromium.args
-    launchViewport = chromium.defaultViewport
-    launchHeadless = chromium.headless
-  } else {
-    // ── Environnement local : cherche Chrome installé sur la machine ──
-    const localCandidates = [
-      process.env.PUPPETEER_EXECUTABLE_PATH,
-      process.env.CHROME_PATH,
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',   // macOS
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',             // macOS
-      '/usr/bin/google-chrome',                                          // Linux
-      '/usr/bin/google-chrome-stable',                                   // Linux
-      '/usr/bin/chromium',                                               // Linux
-      '/usr/bin/chromium-browser',                                       // Linux
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',      // Windows
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' // Windows
-    ].filter(Boolean)
-
-    executablePath = localCandidates.find(p => {
-      try { return fs.existsSync(p) } catch { return false }
-    })
-
-    if (!executablePath) {
-      throw new Error(
-        'Chrome introuvable en local. Installe Google Chrome ou définis PUPPETEER_EXECUTABLE_PATH.'
-      )
-    }
-
-    launchArgs     = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    launchViewport = { width: 1240, height: 1754 }
-    launchHeadless = true
-  }
-
-  const browser = await puppeteer.launch({
-    args: launchArgs,
-    defaultViewport: launchViewport,
-    executablePath,
-    headless: launchHeadless,
+  return await renderPdfFromHtml(html, {
+    format: 'A4',
+    printBackground: true,
+    margin: { top: 0, right: 0, bottom: 0, left: 0 },
   })
-
-  try {
-    const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: 0, right: 0, bottom: 0, left: 0 },
-    })
-    return pdf
-  } finally {
-    await browser.close()
-  }
 }
 
 // ── OFFERTE endpoint ───────────────────────────────────────────────────────
