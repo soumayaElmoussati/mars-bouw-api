@@ -268,33 +268,50 @@ function buildHTML(data) {
 async function htmlToPDF(html) {
   // Import dynamique : obligatoire car @sparticuz/chromium et puppeteer-core
   // sont des modules ESM, et ce fichier est en CommonJS.
-  const chromiumModule = await import('@sparticuz/chromium')
+  const chromiumModule  = await import('@sparticuz/chromium')
   const puppeteerModule = await import('puppeteer-core')
 
-  const chromium = chromiumModule.default || chromiumModule
-  const puppeteer = puppeteerModule.default || puppeteerModule
+  const chromium  = chromiumModule.default  || chromiumModule
+  const puppeteer = puppeteerModule.default || puppeteurModule
 
-  // Résolution du binaire Chromium :
-  // - Sur Vercel/Lambda → chromium.executablePath() télécharge/extrait le binaire
-  // - En local → on utilise le Chrome installé sur la machine
+  // Détection serverless (Vercel / AWS Lambda / Netlify Functions)
+  const isServerless = !!(
+    process.env.VERCEL ||
+    process.env.VERCEL_ENV ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_EXECUTION_ENV ||
+    process.env.NETLIFY
+  )
+
   let executablePath
-  const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+  let launchArgs
+  let launchViewport
+  let launchHeadless
 
   if (isServerless) {
+    // ── Environnement serverless (Vercel) ──
     executablePath = await chromium.executablePath()
 
-    // CRITIQUE sur Vercel : Chromium doit trouver ses .so dans son propre dossier
+    // 🔑 CORRECTIF CRITIQUE : indiquer au linker Linux où trouver les .so
+    // (libnspr4.so, libnss3.so, etc.) extraites par @sparticuz/chromium
     process.env.LD_LIBRARY_PATH = path.dirname(executablePath)
+
+    launchArgs     = chromium.args
+    launchViewport = chromium.defaultViewport
+    launchHeadless = chromium.headless
   } else {
-    // Fallback local : on cherche Chrome sur le système
+    // ── Environnement local (dev) : cherche Chrome installé sur la machine ──
     const localCandidates = [
       process.env.PUPPETEER_EXECUTABLE_PATH,
       process.env.CHROME_PATH,
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
-      '/usr/bin/google-chrome',                                        // Linux
-      '/usr/bin/chromium-browser',                                     // Linux
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',    // Windows
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',   // macOS
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',             // macOS
+      '/usr/bin/google-chrome',                                          // Linux
+      '/usr/bin/google-chrome-stable',                                   // Linux
+      '/usr/bin/chromium',                                               // Linux
+      '/usr/bin/chromium-browser',                                       // Linux
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',      // Windows
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' // Windows
     ].filter(Boolean)
 
     executablePath = localCandidates.find(p => {
@@ -303,16 +320,20 @@ async function htmlToPDF(html) {
 
     if (!executablePath) {
       throw new Error(
-        'Chrome introuvable en local. Installe Chrome ou définis PUPPETEER_EXECUTABLE_PATH.'
+        'Chrome introuvable en local. Installe Google Chrome ou définis PUPPETEER_EXECUTABLE_PATH.'
       )
     }
+
+    launchArgs     = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    launchViewport = { width: 1240, height: 1754 }
+    launchHeadless = true
   }
 
   const browser = await puppeteer.launch({
-    args: isServerless ? chromium.args : ['--no-sandbox', '--disable-setuid-sandbox'],
-    defaultViewport: isServerless ? chromium.defaultViewport : { width: 1240, height: 1754 },
+    args: launchArgs,
+    defaultViewport: launchViewport,
     executablePath,
-    headless: isServerless ? chromium.headless : true,
+    headless: launchHeadless,
   })
 
   try {
