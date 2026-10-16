@@ -264,17 +264,55 @@ function buildHTML(data) {
 </html>`
 }
 
-
-// ── PDF via Chromium (Vercel compatible) ───────────────────────────────────
+// ── PDF via Chromium (Vercel + local compatible) ───────────────────────────
 async function htmlToPDF(html) {
-  const chromium = require('@sparticuz/chromium')
-  const puppeteer = require('puppeteer-core')
+  // Import dynamique : obligatoire car @sparticuz/chromium et puppeteer-core
+  // sont des modules ESM, et ce fichier est en CommonJS.
+  const chromiumModule = await import('@sparticuz/chromium')
+  const puppeteerModule = await import('puppeteer-core')
+
+  const chromium = chromiumModule.default || chromiumModule
+  const puppeteer = puppeteerModule.default || puppeteerModule
+
+  // Résolution du binaire Chromium :
+  // - Sur Vercel/Lambda → chromium.executablePath() télécharge/extrait le binaire
+  // - En local → on utilise le Chrome installé sur la machine
+  let executablePath
+  const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
+
+  if (isServerless) {
+    executablePath = await chromium.executablePath()
+
+    // CRITIQUE sur Vercel : Chromium doit trouver ses .so dans son propre dossier
+    process.env.LD_LIBRARY_PATH = path.dirname(executablePath)
+  } else {
+    // Fallback local : on cherche Chrome sur le système
+    const localCandidates = [
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      process.env.CHROME_PATH,
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
+      '/usr/bin/google-chrome',                                        // Linux
+      '/usr/bin/chromium-browser',                                     // Linux
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',    // Windows
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    ].filter(Boolean)
+
+    executablePath = localCandidates.find(p => {
+      try { return fs.existsSync(p) } catch { return false }
+    })
+
+    if (!executablePath) {
+      throw new Error(
+        'Chrome introuvable en local. Installe Chrome ou définis PUPPETEER_EXECUTABLE_PATH.'
+      )
+    }
+  }
 
   const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
+    args: isServerless ? chromium.args : ['--no-sandbox', '--disable-setuid-sandbox'],
+    defaultViewport: isServerless ? chromium.defaultViewport : { width: 1240, height: 1754 },
+    executablePath,
+    headless: isServerless ? chromium.headless : true,
   })
 
   try {
